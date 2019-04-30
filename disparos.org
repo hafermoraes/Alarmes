@@ -1,0 +1,318 @@
+# ---- Específico do Org mode -------
+#+TITLE: Acompanhamento dos disparos de alarme 
+#+AUTHOR: Rafael Rodrigues de Moraes
+#+STARTUP: inlineimages
+#+LANGUAGE: pt
+#+OPTIONS: H:3 num:n @:t \n:t ::t |:t ':t ^:nil f:t *:t TeX:t LaTeX:t
+#+OPTIONS: date:t author:nil toc:nil title:t
+
+# ---- Específico do LaTeX -------
+#+LATEX_CLASS_OPTIONS: [12pt]
+#+LATEX_HEADER: \usepackage[a4paper, left=10mm, top=10mm, right=10mm, bottom=20mm]{geometry}   % margens
+#+LaTeX_HEADER: \usepackage{lmodern}                    % fonte 'lmodern'
+#+LaTeX_HEADER: \usepackage[portuguese]{babel}          % suporte à lingua portuguesa
+#+LaTeX_HEADER: \usepackage{longtable}                  % tabelas maiores que uma página
+#+LaTeX_HEADER: \usepackage[table]{color,xcolor}	% Controle das cores
+#+LaTeX_HEADER: \usepackage{graphicx}			% Inclusão de gráficos
+#+LaTeX_HEADER: \usepackage{pdfpages}			% anexar lei em pdf ao acompanhamento
+#+LaTeX_HEADER: \usepackage{soulutf8}		        % cor de fundo de palavras com acentuação
+
+# ---- Inspiração para o relatório -------------------------------------------------------
+# Fonte: https://fairhaven.typepad.com/my_weblog/2015/12/org-mode-r-and-graphics.html
+# ----------------------------------------------------------------------------------------
+
+# -------- tratamento inicial das informações ---------------------------------
+#+BEGIN_SRC R :exports none :results silent :var df=tbl :session
+  df <- df[-1,]                   # desconsidera os títulos de coluna da tabela 3
+  names(df) <- c("data"           # renomeia colunas
+		,"dia"
+		,"inicio"
+		,"termino"
+		,"duracao"
+		,"infracao"
+		 )
+  df$infracao <- as.numeric(ifelse(df$infracao==1,1,0))        # 'infracao' --> variável numérica
+  df$duracao <- as.difftime( df$duracao, format="%H:%M:%S")    # duração formatado como tempo
+  df$tempo_segundos <- as.numeric(df$duracao)
+  df$dia_por_extenso <- factor( df$dia   # reordena os níveis do fator. Semana começa no domingo
+			      ,levels=c("Domingo"
+				       ,"Segunda-feira"
+				       ,"Terça-feira"
+				       ,"Quarta-feira"
+				       ,"Quinta-feira"
+				       ,"Sexta-feira"
+				       ,"Sábado")
+			       )
+
+  df <- df[order(df$data),]  # ordena a tabela conforma coluna 'data'
+  df$segs_desde_0hr <- as.numeric(  # diferença em segundos para o primeiro segundo do dia
+      difftime(
+	  strptime(df$inicio, format="%H:%M:%S")
+	 ,strptime(rep("00:00:00",nrow(df)), "%H:%M:%S")
+	 ,units="sec"
+      )
+  )
+#+END_SRC
+# -----------------------------------------------------------------------------
+
+# -------- Trecho da Lei N° 14.011/2011 -------------------------------------------------
+#+BEGIN_QUOTE
+DAS EXCEÇÕES ÀS PROIBIÇÕES  (*Lei Ordinária N° 14.011/2011* de Campinas/SP)
+Art. 5º Ficam permitidas as emissões sonoras ou ruídos produzidos por:
+  a) sinos de igrejas;
+  b) templos públicos para indicar horas ou anunciar a realização de atos ou cultos religiosos;
+  c) passagem de fanfarras, ou bandas de músicas em procissões, cortejos ou desfiles públicos;
+  d) aparelhos sonoros de veículos oficiais;
+  \hl{e) aparelhos sonoros de alerta para assinalar horários de saída e entrada de locais de trabalho, nesses casos por no máximo 30 (trinta) segundos.}
+                                                 
+#+END_QUOTE
+# ---------------------------------------------------------------------------------------
+
+#+LATEX: \rowcolors{2}{gray!07}{white}
+#+BEGIN_SRC R :exports results :colnames yes :session
+    ## dados agregados e com novas variáveis
+    library(dplyr)    # pipe, mutate, group_by e summarize
+
+    df.agr <- df %>%
+	mutate(
+	    ano = strftime(data, format="%Y")                  # ano
+	   ,nr_semana    = strftime(data, format = "%U")       # número da semana (domingo é o 1° dia da semana)
+	   ,nr_infracoes = infracao
+	)                                                 %>%  # inclui número de semana
+	group_by( data, dia_por_extenso, ano, nr_semana ) %>%  # agrupa por dia
+	summarize(
+	    total_disparo_em_segundos = sum( tempo_segundos )  # soma a duração dos alarmes por dia 
+	   ,total_disparos= n()                                # qtde total de disparos
+	   ,total_infracoes = sum(nr_infracoes)                # qtde total de infrações
+	)       
+
+  semanas <- data.frame( data=seq(as.Date("2019-01-01"), Sys.Date(), by="1 day")) %>%
+      mutate(
+	  ano = format(data, "%Y")
+	 ,nr_semana = strftime(data, format="%U")
+      ) %>%
+      group_by( ano, nr_semana ) %>%
+      summarize( pri_dia = min( data), ult_dia=max(data))
+
+  df.resumo <- as.data.frame(
+      df.agr %>%
+	left_join(semanas, by=c("ano", "nr_semana")) %>%
+      group_by( ano, nr_semana, pri_dia, ult_dia ) %>%
+      summarize(
+	  total_s = round( sum( total_disparo_em_segundos)/60, 1 )
+	 ,nr_disparos = sum (total_disparos)
+	 ,infracoes = sum( total_infracoes )
+	 ,pct_infracoes = round( sum( total_infracoes ) / sum(total_disparos) * 100, 1)
+      )
+  )
+  df.resumo  <- df.resumo[order(df.resumo$nr_semana, decreasing = TRUE),]
+  df.resumo$nr_semana <- as.numeric(df.resumo$nr_semana)+1
+  names(df.resumo) <- c("Ano","Semana","De","A","Tempo (minutos)","Disparos (D)","Infrações (I)", "I/D %")
+  head(df.resumo, 10)
+#+END_SRC
+
+#+ATTR_LATEX: :environment longtable :align c|c|c|c|p{1.8cm}|p{1.7cm}|p{1.7cm}|c
+#+CAPTION: Resumo da situação atual dos disparos
+#+RESULTS:
+|  Ano | Semana |         De |          A | Tempo (minutos) | Disparos (D) | Infrações (I) | I/D % |
+|------+--------+------------+------------+-----------------+--------------+---------------+-------|
+| 2019 |     18 | 2019-04-28 | 2019-04-30 |            15.5 |            4 |             4 |   100 |
+| 2019 |     17 | 2019-04-21 | 2019-04-27 |             8.2 |            8 |             6 |    75 |
+| 2019 |     16 | 2019-04-14 | 2019-04-20 |            13.8 |           11 |            11 |   100 |
+| 2019 |     15 | 2019-04-07 | 2019-04-13 |              20 |            6 |             6 |   100 |
+| 2019 |     14 | 2019-03-31 | 2019-04-06 |            34.6 |           12 |            12 |   100 |
+| 2019 |     13 | 2019-03-24 | 2019-03-30 |              32 |            9 |             9 |   100 |
+| 2019 |     12 | 2019-03-17 | 2019-03-23 |            25.9 |           10 |             9 |    90 |
+
+#+BEGIN_SRC R :exports results :results output graphics :file ./figs/00_disparo_por_hora.png :width 800 :height 400 :session
+  library(ggplot2)
+
+  ggplot( aes(x=as.Date(data), y=segs_desde_0hr, size=tempo_segundos), data=df) +
+      geom_point(aes(colour=factor(infracao))) +
+      scale_color_manual(
+	  name="Infração"
+	 ,values=c("green","red")
+	 ,labels=c("não","sim")
+      ) +
+      scale_size( name="Duração em segundos" ) +
+      labs(title="horário dos disparos"
+	  ,subtitle="Tamanho dos pontos é proporcional à duração do disparo em segundos"
+	  ,caption="Fonte: Tabela 3")+
+      theme_bw() +
+      theme(axis.text.x = element_text(angle = 90)
+	   ,axis.title.x = element_blank()
+	   ,axis.title.y = element_blank()
+	   ,legend.position = "bottom"
+	    ) +
+      scale_x_date( date_breaks="1 day", date_labels= format("%d.%m (%a)") ) +
+      ylim(0, 24*60*60) + 
+      scale_y_continuous(breaks = (0:23)*60*60 ,labels=paste(sprintf("%02d",0:23), ":00", sep=""))
+#+END_SRC
+
+#+RESULTS:
+[[file:./figs/00_disparo_por_hora.png]]
+
+\pagebreak
+
+#+BEGIN_SRC R :exports results :results output graphics :file ./figs/01_painel.png :width 800 :height 800 :session
+  layout( matrix(c(1,1,2,3),2,2, byrow=TRUE) )
+
+  plot(df$duracao
+      ,main="tempo por disparo individual (medições desde 17/03/2019)"
+      ,ylab="segundos"
+      ,xlab=""
+      ,pch=16
+      ,type="o"
+  )
+
+  plot(y=df.agr$total_disparo_em_segundos
+      ,x=as.Date(df.agr$data, format="%Y-%m-%d")
+      ,main="tempo total de disparo por dia "
+      ,xlab=""
+      ,ylab="segundos"
+      ,pch=16
+      ,type="o"
+      ,xaxt="n"
+  )
+  axis.Date( 1, at=seq( as.Date(min(df.agr$data)), as.Date(max(df.agr$data)), "2 days"), las=2)
+  #media <- df.agr %>%
+  #    group_by() %>%
+  #    summarise( mean(total_disparo_em_segundos) )
+  #abline(h=media, lty=2)
+
+  plot(y=df.agr$total_disparos
+      ,x=as.Date(df.agr$data, format="%Y-%m-%d")
+      ,main="n° de disparos por dia"
+      ,xlab=""
+      ,ylab="quantidade"
+      ,ylim=c(0,max(df.agr$total_disparos) )
+      ,pch=16
+      ,type="o"
+      ,xaxt="n"
+       )
+  axis.Date( 1, at=seq( as.Date(min(df.agr$data)), as.Date(max(df.agr$data)), "2 days"), las=2)
+#+END_SRC
+
+#+RESULTS:
+[[file:./figs/01_painel.png]]
+
+#+LATEX: \rowcolors{2}{gray!07}{white}
+#+NAME: tbl-ligacoes
+#+CAPTION: Registro das ligações à empresa de segurança
+|---------------------------+---------|
+| Horário da ligação        | Duração |
+|---------------------------+---------|
+| 4 de Abril de 2019 17:33  |   05:20 |
+| 2 de Abril de 2019 22:26  |   00:41 |
+| 31 de Março de 2019 11:06 |   01:43 |
+| 31 de Março de 2019 10:56 |   02:38 |
+| 31 de Março de 2019 08:58 |   02:13 |
+| 31 de Março de 2019 08:21 |   03:02 |
+| 30 de Março de 2019 08:20 |   02:07 |
+| 30 de Março de 2019 08:00 |   02:02 |
+| 27 de Março de 2019 19:36 |   01:35 |
+| 24 de Março de 2019 12:46 |   02:43 |
+| 24 de Março de 2019 12:11 |   15:11 |
+|---------------------------+---------|
+
+\pagebreak
+#+LATEX: \rowcolors{2}{gray!07}{white}
+#+NAME: tbl
+#+CAPTION: Registro dos disparos individuais do alarme
+#+ATTR_LATEX: :environment longtable :align l|l|l|l|l|l|l|p{3cm}
+|------------+---------------+----------+----------+----------+----------|
+|       Data | Dia da semana |   Início |  Término |  Duração | Infração |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-03-17 | Domingo       | 09:12:00 | 09:16:00 | 00:04:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-03-18 | Segunda-feira | 06:35:00 | 06:42:00 | 00:07:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-03-19 | Terça-feira   | 00:10:00 | 00:13:00 | 00:03:00 |        1 |
+| 2019-03-19 | Terça-feira   | 06:32:00 | 06:36:00 | 00:04:00 |        1 |
+| 2019-03-19 | Terça-feira   | 06:37:00 | 06:40:00 | 00:03:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-03-20 | Quarta-feira  | 06:00:00 | 06:01:00 | 00:01:00 |        1 |
+| 2019-03-20 | Quarta-feira  | 20:05:00 | 20:05:15 | 00:00:15 |          |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-03-21 | Quinta-feira  | 19:34:00 | 19:36:00 | 00:02:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-03-22 | Sexta-feira   | 06:55:00 | 06:55:40 | 00:00:40 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-03-23 | Sábado        | 01:30:00 | 01:31:00 | 00:01:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-03-24 | Domingo       | 09:10:00 | 09:15:00 | 00:05:00 |        1 |
+| 2019-03-24 | Domingo       | 12:08:00 | 12:13:00 | 00:05:00 |        1 |
+| 2019-03-24 | Domingo       | 14:23:00 | 14:26:00 | 00:03:00 |        1 |
+| 2019-03-24 | Domingo       | 15:51:00 | 15:54:00 | 00:03:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-03-25 | Segunda-feira | 07:00:00 | 07:01:00 | 00:01:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-03-28 | Quarta-feira  | 19:11:00 | 19:15:00 | 00:04:00 |        1 |
+| 2019-03-28 | Quarta-feira  | 19:20:00 | 19:21:00 | 00:01:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-03-30 | Sábado        | 07:28:00 | 07:33:00 | 00:05:00 |        1 |
+| 2019-03-30 | Sábado        | 08:16:00 | 08:21:00 | 00:05:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-03-31 | Domingo       | 06:59:00 | 07:02:00 | 00:03:00 |        1 |
+| 2019-03-31 | Domingo       | 08:00:00 | 08:02:00 | 00:02:00 |        1 |
+| 2019-03-31 | Domingo       | 08:58:00 | 09:01:00 | 00:03:00 |        1 |
+| 2019-03-31 | Domingo       | 10:53:00 | 10:58:00 | 00:05:00 |        1 |
+| 2019-03-31 | Domingo       | 11:06:00 | 11:09:00 | 00:03:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-02 | Terça-feira   | 22:23:00 | 22:26:00 | 00:03:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-03 | Quarta-feira  | 06:48:00 | 06:48:45 | 00:00:45 |        1 |
+| 2019-04-03 | Quarta-feira  | 19:23:00 | 19:27:00 | 00:04:00 |        1 |
+| 2019-04-03 | Quarta-feira  | 20:20:00 | 20:20:50 | 00:00:50 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-04 | Quinta-feira  | 06:18:00 | 06:22:00 | 00:04:00 |        1 |
+| 2019-04-04 | Quinta-feira  | 20:04:00 | 20:06:00 | 00:02:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-06 | Sábado        | 08:38:00 | 08:42:00 | 00:04:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-07 | Domingo       | 09:10:00 | 09:15:00 | 00:05:00 |        1 |
+| 2019-04-07 | Domingo       | 10:12:00 | 10:15:00 | 00:03:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-11 | Quinta-feira  | 04:42:00 | 04:46:00 | 00:04:00 |        1 |
+| 2019-04-11 | Quinta-feira  | 04:14:00 | 04:18:00 | 00:04:00 |        1 |
+| 2019-04-11 | Quinta-feira  | 19:43:00 | 19:45:00 | 00:02:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-13 | Sábado        | 08:07:00 | 08:09:00 | 00:02:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-14 | Domingo       | 07:55:00 | 07:58:00 | 00:03:00 |        1 |
+| 2019-04-14 | Domingo       | 10:24:00 | 10:27:00 | 00:03:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-16 | Terça-Feira   | 06:45:00 | 06:49:00 | 00:04:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-18 | Quinta-feira  | 20:04:00 | 20:05:00 | 00:01:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-19 | Sexta-feira   | 10:10:00 | 10:10:30 | 00:00:30 |        1 |
+| 2019-04-19 | Sexta-feira   | 10:14:00 | 10:15:00 | 00:01:00 |        1 |
+| 2019-04-19 | Sexta-feira   | 11:30:00 | 11:30:30 | 00:00:30 |        1 |
+| 2019-04-19 | Sexta-feira   | 11:35:00 | 11:35:15 | 00:00:15 |        1 |
+| 2019-04-19 | Sexta-feira   | 11:40:00 | 11:40:10 | 00:00:10 |        1 |
+| 2019-04-19 | Sexta-feira   | 13:16:00 | 13:16:10 | 00:00:10 |        1 |
+| 2019-04-19 | Sexta-feira   | 14:37:00 | 14:37:10 | 00:00:10 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-21 | Domingo       | 08:05:00 | 08:05:05 | 00:00:05 |        1 |
+| 2019-04-21 | Domingo       | 09:23:00 | 09:23:05 | 00:00:05 |        1 |
+| 2019-04-21 | Domingo       | 11:40:00 | 11:40:05 | 00:00:05 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-25 | Quinta-feira  | 06:54:00 | 06:54:20 | 00:00:20 |          |
+| 2019-04-25 | Quinta-feira  | 21:46:00 | 21:49:00 | 00:03:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-26 | Sexta-feira   | 06:05:00 | 06:05:20 | 00:00:20 |          |
+| 2019-04-26 | Sexta-feira   | 06:49:00 | 06:53:00 | 00:04:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-27 | Sábado        | 21:30:00 | 21:30:20 | 00:00:20 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+| 2019-04-28 | Domingo       | 10:29:00 | 10:32:30 | 00:03:30 |        1 |
+| 2019-04-28 | Domingo       | 10:43:00 | 10:46:00 | 00:03:00 |        1 |
+| 2019-04-28 | Domingo       | 11:17:00 | 11:21:00 | 00:04:00 |        1 |
+| 2019-04-28 | Domingo       | 12:01:00 | 12:06:00 | 00:05:00 |        1 |
+|------------+---------------+----------+----------+----------+----------|
+#+TBLFM: $5=$4-$3;T
+
+\pagebreak
+#+LaTeX: \includepdf[pages=-]{Lei14011}
+
